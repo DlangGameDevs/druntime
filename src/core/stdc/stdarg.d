@@ -37,11 +37,74 @@ version (LDC)
         else version = AAPCS64;
     }
 
-    version (AArch64)
+    version (AAPCS64)
     {
         void va_arg_aarch64(T)(ref __va_list ap, ref T parmn)
         {
-            assert(false, "Not yet implemented");
+            auto dummy = __traits(isHFVA, T).init;
+            enum isHFVA = dummy.sizeof != 0;
+
+            void onStack()
+            {
+                size_t arg = cast(size_t) ap.__stack;
+                static if (T.alignof > 8)
+                    arg = (arg + 15) & -16;
+                ap.__stack = cast(void*) ((arg + T.sizeof + 7) & -8);
+                version (BigEndian)
+                {
+                    static if (classof(type) != "aggregate" && T.sizeof < 8)
+                        arg += 8 - T.sizeof;
+                }
+                parmn = *cast(T*) arg;
+            }
+
+            static if (!__traits(isPOD, T) || (T.sizeof > 16 && !isHFVA))
+            {
+                // indirectly by value; get pointer
+                T* ptr;
+                va_arg_aarch64(ap, ptr);
+                parmn = *ptr;
+            }
+            else static if (isHFVA || __traits(isFloating, T) || isVectorType!T)
+            {
+                import core.stdc.string : memcpy;
+
+                // SIMD register(s)
+                int offs = ap.__vr_offs;
+                if (offs >= 0)
+                    return onStack();           // reg save area empty
+                enum usedRegSize = isHFVA ? dummy[0].sizeof : T.sizeof;
+                enum int nreg = isHFVA ? dummy.sizeof / usedRegSize : 1;
+                ap.__vr_offs = offs + (nreg * 16);
+                if (ap.__vr_offs > 0)
+                    return onStack();           // overflowed reg save area
+                version (BigEndian)
+                {
+                    if (classof(type) != "aggregate" && usedRegSize < 16)
+                        offs += 16 - usedRegSize;
+                }
+                for (int i = 0; i < nreg; i++, offs += 16)
+                    memcpy((cast(void*) &parmn) + i * usedRegSize, ap.__vr_top + offs, usedRegSize);
+            }
+            else
+            {
+                // GP register(s)
+                int offs = ap.__gr_offs;
+                if (offs >= 0)
+                    return onStack();           // reg save area empty
+                static if (T.alignof > 8)
+                    offs = (offs + 15) & -16;   // round up
+                enum int nreg = (T.sizeof + 7) / 8;
+                ap.__gr_offs = offs + (nreg * 8);
+                if (ap.__gr_offs > 0)
+                    return onStack();           // overflowed reg save area
+                version (BigEndian)
+                {
+                    static if (classof(type) != "aggregate" && T.sizeof < 8)
+                        offs += 8 - T.sizeof;
+                }
+                parmn = *cast(T*) (ap.__gr_top + offs);
+            }
         }
 
         void va_arg_aarch64()(ref __va_list ap, TypeInfo ti, void* parmn)
@@ -355,6 +418,17 @@ version (LDC)
         void va_copy(out va_list dest, va_list src);
 } // version (LDC)
 
+// Determine if type is a vector type
+template isVectorType(T)
+{
+    enum isVectorType = false;
+}
+
+template isVectorType(T : __vector(T[N]), size_t N)
+{
+    enum isVectorType = true;
+}
+
 // LDC: we need a few non-Windows x86_64 helpers
 version (X86)
 {
@@ -500,17 +574,6 @@ else version (Windows) // Win64
 }
 else version (X86_64)
 {
-    // Determine if type is a vector type
-    template isVectorType(T)
-    {
-        enum isVectorType = false;
-    }
-
-    template isVectorType(T : __vector(T[N]), size_t N)
-    {
-        enum isVectorType = true;
-    }
-
   version (LDC)
   {
     alias __va_list = __va_list_tag;
