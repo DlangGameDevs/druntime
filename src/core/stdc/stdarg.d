@@ -41,69 +41,83 @@ version (LDC)
     {
         void va_arg_aarch64(T)(ref __va_list ap, ref T parmn)
         {
-            auto dummy = __traits(isHFVA, T).init;
-            enum isHFVA = dummy.sizeof != 0;
-
-            void onStack()
+            static if (is(T ArgTypes == __argTypes))
             {
-                size_t arg = cast(size_t) ap.__stack;
-                static if (T.alignof > 8)
-                    arg = (arg + 15) & -16;
-                ap.__stack = cast(void*) ((arg + T.sizeof + 7) & -8);
-                version (BigEndian)
+                void onStack()
                 {
-                    static if (classof(type) != "aggregate" && T.sizeof < 8)
-                        arg += 8 - T.sizeof;
+                    size_t arg = cast(size_t) ap.__stack;
+                    static if (T.alignof > 8)
+                        arg = (arg + 15) & -16;
+                    ap.__stack = cast(void*) ((arg + T.sizeof + 7) & -8);
+                    version (BigEndian)
+                    {
+                        static if (classof(type) != "aggregate" && T.sizeof < 8)
+                            arg += 8 - T.sizeof;
+                    }
+                    parmn = *cast(T*) arg;
                 }
-                parmn = *cast(T*) arg;
-            }
 
-            static if (!__traits(isPOD, T) || (T.sizeof > 16 && !isHFVA))
-            {
-                // indirectly by value; get pointer
-                T* ptr;
-                va_arg_aarch64(ap, ptr);
-                parmn = *ptr;
-            }
-            else static if (isHFVA || __traits(isFloating, T) || isVectorType!T)
-            {
-                import core.stdc.string : memcpy;
-
-                // SIMD register(s)
-                int offs = ap.__vr_offs;
-                if (offs >= 0)
-                    return onStack();           // reg save area empty
-                enum usedRegSize = isHFVA ? dummy[0].sizeof : T.sizeof;
-                enum int nreg = isHFVA ? dummy.sizeof / usedRegSize : 1;
-                ap.__vr_offs = offs + (nreg * 16);
-                if (ap.__vr_offs > 0)
-                    return onStack();           // overflowed reg save area
-                version (BigEndian)
+                static if (ArgTypes.length == 0)
                 {
-                    if (classof(type) != "aggregate" && usedRegSize < 16)
-                        offs += 16 - usedRegSize;
+                    // indirectly by value; get pointer
+                    T* ptr;
+                    va_arg_aarch64(ap, ptr);
+                    parmn = *ptr;
+                    return;
                 }
-                for (int i = 0; i < nreg; i++, offs += 16)
-                    memcpy((cast(void*) &parmn) + i * usedRegSize, ap.__vr_top + offs, usedRegSize);
+
+                static assert(ArgTypes.length == 1);
+
+                static if (is(ArgTypes[0] E : E[N], int N))
+                    alias FundamentalType = E; // static array element type
+                else
+                    alias FundamentalType = ArgTypes[0];
+
+                static if (__traits(isFloating, FundamentalType) || isVectorType!FundamentalType)
+                {
+                    import core.stdc.string : memcpy;
+
+                    // SIMD register(s)
+                    int offs = ap.__vr_offs;
+                    if (offs >= 0)
+                        return onStack();           // reg save area empty
+                    enum int usedRegSize = FundamentalType.sizeof;
+                    static assert(T.sizeof % usedRegSize == 0);
+                    enum int nreg = T.sizeof / usedRegSize;
+                    ap.__vr_offs = offs + (nreg * 16);
+                    if (ap.__vr_offs > 0)
+                        return onStack();           // overflowed reg save area
+                    version (BigEndian)
+                    {
+                        if (classof(type) != "aggregate" && usedRegSize < 16)
+                            offs += 16 - usedRegSize;
+                    }
+                    static foreach (i; 0 .. nreg)
+                        memcpy((cast(void*) &parmn) + i * usedRegSize, ap.__vr_top + (offs + i * 16), usedRegSize);
+                }
+                else
+                {
+                    // GP register(s)
+                    int offs = ap.__gr_offs;
+                    if (offs >= 0)
+                        return onStack();           // reg save area empty
+                    static if (T.alignof > 8)
+                        offs = (offs + 15) & -16;   // round up
+                    enum int nreg = (T.sizeof + 7) / 8;
+                    ap.__gr_offs = offs + (nreg * 8);
+                    if (ap.__gr_offs > 0)
+                        return onStack();           // overflowed reg save area
+                    version (BigEndian)
+                    {
+                        static if (classof(type) != "aggregate" && T.sizeof < 8)
+                            offs += 8 - T.sizeof;
+                    }
+                    parmn = *cast(T*) (ap.__gr_top + offs);
+                }
             }
             else
             {
-                // GP register(s)
-                int offs = ap.__gr_offs;
-                if (offs >= 0)
-                    return onStack();           // reg save area empty
-                static if (T.alignof > 8)
-                    offs = (offs + 15) & -16;   // round up
-                enum int nreg = (T.sizeof + 7) / 8;
-                ap.__gr_offs = offs + (nreg * 8);
-                if (ap.__gr_offs > 0)
-                    return onStack();           // overflowed reg save area
-                version (BigEndian)
-                {
-                    static if (classof(type) != "aggregate" && T.sizeof < 8)
-                        offs += 8 - T.sizeof;
-                }
-                parmn = *cast(T*) (ap.__gr_top + offs);
+                static assert(false, "not a valid argument type for va_arg");
             }
         }
 
