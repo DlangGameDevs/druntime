@@ -59,7 +59,7 @@ version (LDC)
 
                 static if (ArgTypes.length == 0)
                 {
-                    // indirectly by value; get pointer
+                    // indirectly by value; get pointer and copy
                     T* ptr;
                     va_arg_aarch64(ap, ptr);
                     parmn = *ptr;
@@ -89,7 +89,7 @@ version (LDC)
                         return onStack();           // overflowed reg save area
                     version (BigEndian)
                     {
-                        if (classof(type) != "aggregate" && usedRegSize < 16)
+                        static if (classof(type) != "aggregate" && usedRegSize < 16)
                             offs += 16 - usedRegSize;
                     }
                     static foreach (i; 0 .. nreg)
@@ -123,7 +123,88 @@ version (LDC)
 
         void va_arg_aarch64()(ref __va_list ap, TypeInfo ti, void* parmn)
         {
-            assert(false, "Not yet implemented");
+            import core.stdc.string : memcpy;
+
+            const size = ti.tsize;
+            const alignment = ti.talign;
+
+            if (auto ti_struct = cast(TypeInfo_Struct) ti)
+            {
+                TypeInfo arg1, arg2;
+                ti.argTypes(arg1, arg2);
+
+                if (!arg1)
+                {
+                    // indirectly by value; get pointer and move
+                    void* ptr;
+                    va_arg_aarch64(ap, ptr);
+                    memcpy(parmn, ptr, size);
+                    return;
+                }
+
+                assert(!arg2);
+                ti = arg1;
+            }
+
+            void onStack()
+            {
+                size_t arg = cast(size_t) ap.__stack;
+                if (alignment > 8)
+                    arg = (arg + 15) & -16;
+                ap.__stack = cast(void*) ((arg + size + 7) & -8);
+                version (BigEndian)
+                {
+                    if (classof(type) != "aggregate" && size < 8)
+                        arg += 8 - size;
+                }
+                memcpy(parmn, cast(void*) arg, size);
+            }
+
+            // HFVA structs have already been lowered to static arrays;
+            // lower `ti` further to the fundamental type, including HFVA
+            // static arrays. TODO: complex numbers
+            if (auto ti_sarray = cast(TypeInfo_StaticArray) ti)
+                ti = ti_sarray.value;
+
+            if (ti.flags() & 2)
+            {
+                // SIMD register(s)
+                int offs = ap.__vr_offs;
+                if (offs >= 0)
+                    return onStack();           // reg save area empty
+                const usedRegSize = cast(int) ti.tsize;
+                assert(size % usedRegSize == 0);
+                const nreg = cast(int) (size / usedRegSize);
+                ap.__vr_offs = offs + (nreg * 16);
+                if (ap.__vr_offs > 0)
+                    return onStack();           // overflowed reg save area
+                version (BigEndian)
+                {
+                    if (classof(type) != "aggregate" && usedRegSize < 16)
+                        offs += 16 - usedRegSize;
+                }
+                foreach (i; 0 .. nreg)
+                    memcpy(parmn + i * usedRegSize, ap.__vr_top + (offs + i * 16), usedRegSize);
+
+                return;
+            }
+
+            // GP register(s)
+            int offs = ap.__gr_offs;
+            if (offs >= 0)
+                return onStack();           // reg save area empty
+            if (alignment > 8)
+                offs = (offs + 15) & -16;   // round up
+            const nreg = cast(int) ((size + 7) / 8);
+            ap.__gr_offs = offs + (nreg * 8);
+            if (ap.__gr_offs > 0)
+                return onStack();           // overflowed reg save area
+            version (BigEndian)
+            {
+                if (classof(type) != "aggregate" && size < 8)
+                    offs += 8 - size;
+            }
+            memcpy(parmn, ap.__gr_top + offs, size);
         }
     }
 

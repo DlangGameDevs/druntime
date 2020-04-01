@@ -871,7 +871,7 @@ class TypeInfo_Vector : TypeInfo
     override void swap(void* p1, void* p2) const { return base.swap(p1, p2); }
 
     override @property inout(TypeInfo) next() nothrow pure inout { return base.next; }
-    override @property uint flags() nothrow pure const { return base.flags; }
+    override @property uint flags() nothrow pure const { return 2; }
 
     override const(void)[] initializer() nothrow pure const
     {

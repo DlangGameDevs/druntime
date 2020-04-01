@@ -66,4 +66,10 @@ class TypeInfo_e : TypeInfo
     }
 
     override @property immutable(void)* rtInfo() nothrow pure const @safe { return rtinfoNoPointers; }
+
+    static if (real.mant_dig != 64) // exclude 80-bit X87
+    {
+        // 2 means arg to function is passed in SIMD registers
+        override @property uint flags() const { return 2; }
+    }
 }
