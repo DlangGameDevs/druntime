@@ -45,10 +45,10 @@ version (LDC)
             {
                 void onStack()
                 {
-                    size_t arg = cast(size_t) ap.__stack;
+                    void* arg = ap.__stack;
                     static if (T.alignof > 8)
-                        arg = (arg + 15) & -16;
-                    ap.__stack = cast(void*) ((arg + T.sizeof + 7) & -8);
+                        arg = arg.alignUp!16;
+                    ap.__stack = alignUp(arg + T.sizeof);
                     version (BigEndian)
                     {
                         static if (classof(type) != "aggregate" && T.sizeof < 8)
@@ -102,7 +102,7 @@ version (LDC)
                     if (offs >= 0)
                         return onStack();           // reg save area empty
                     static if (T.alignof > 8)
-                        offs = (offs + 15) & -16;   // round up
+                        offs = offs.alignUp!16;
                     enum int nreg = (T.sizeof + 7) / 8;
                     ap.__gr_offs = offs + (nreg * 8);
                     if (ap.__gr_offs > 0)
@@ -148,16 +148,16 @@ version (LDC)
 
             void onStack()
             {
-                size_t arg = cast(size_t) ap.__stack;
+                void* arg = ap.__stack;
                 if (alignment > 8)
-                    arg = (arg + 15) & -16;
-                ap.__stack = cast(void*) ((arg + size + 7) & -8);
+                    arg = arg.alignUp!16;
+                ap.__stack = alignUp(arg + size);
                 version (BigEndian)
                 {
                     if (classof(type) != "aggregate" && size < 8)
                         arg += 8 - size;
                 }
-                memcpy(parmn, cast(void*) arg, size);
+                memcpy(parmn, arg, size);
             }
 
             // HFVA structs have already been lowered to static arrays;
@@ -194,7 +194,7 @@ version (LDC)
             if (offs >= 0)
                 return onStack();           // reg save area empty
             if (alignment > 8)
-                offs = (offs + 15) & -16;   // round up
+                offs = offs.alignUp!16;
             const nreg = cast(int) ((size + 7) / 8);
             ap.__gr_offs = offs + (nreg * 8);
             if (ap.__gr_offs > 0)
@@ -313,13 +313,13 @@ version (LDC)
         else version (X86)
         {
             T arg = *cast(T*)ap;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
             return arg;
         }
         else version (AArch64)
         {
             T arg = *cast(T*)ap;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
             return arg;
         }
         else version (ARM)
@@ -329,10 +329,10 @@ version (LDC)
             version (AAPCS)
             {
                 if (T.alignof >= 8)
-                    ap.ptr = cast(void*)((cast(size_t)ap.ptr + 7) & ~7);
+                    ap.ptr = ap.ptr.alignUp!8;
             }
             T arg = *cast(T*)ap.ptr;
-            ap.ptr += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap.ptr += T.sizeof.alignUp;
             return arg;
         }
         else version (AnyPPC)
@@ -346,19 +346,19 @@ version (LDC)
             // Chapter 3.1.4 and 3.2.3: Alignment may require the va_list pointer to first
             // be aligned before accessing a value.
             if (T.alignof >= 8)
-                ap = cast(va_list)((cast(size_t)ap + 7) & ~7);
+                ap = ap.alignUp!8;
             version (BigEndian)
                 auto p = (T.sizeof < size_t.sizeof ? ap + (size_t.sizeof - T.sizeof) : ap);
             version (LittleEndian)
                 auto p = ap;
             T arg = *cast(T*)p;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
             return arg;
         }
         else version (AnyMIPS)
         {
             T arg = *cast(T*)ap;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
             return arg;
         }
         else
@@ -395,12 +395,12 @@ version (LDC)
         else version (X86)
         {
             parmn = *cast(T*)ap;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
         }
         else version (AArch64)
         {
             parmn = *cast(T*)ap;
-            ap += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += T.sizeof.alignUp;
         }
         else version (ARM)
         {
@@ -409,10 +409,10 @@ version (LDC)
             version (AAPCS)
             {
                 if (T.alignof >= 8)
-                    ap.ptr = cast(void*)((cast(size_t)ap.ptr + 7) & ~7);
+                    ap.ptr = ap.ptr.alignUp!8;
             }
             parmn = *cast(T*)ap.ptr;
-            ap.ptr += (T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap.ptr += T.sizeof.alignUp;
         }
         else
             parmn = va_arg!T(ap);
@@ -438,7 +438,7 @@ version (LDC)
             //auto talign = ti.talign;
             //auto p = cast(va_list) ((cast(size_t)ap + talign - 1) & ~(talign - 1));
             auto p = ap;
-            ap = p + ((tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1));
+            ap = p + tsize.alignUp;
         }
         else version (Win64)
         {
@@ -458,7 +458,7 @@ version (LDC)
         else version (AArch64)
         {
             auto p = ap;
-            ap = p + ((tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1));
+            ap = p + tsize.alignUp;
         }
         else version (ARM)
         {
@@ -467,10 +467,10 @@ version (LDC)
             version (AAPCS)
             {
                 if (ti.talign >= 8)
-                    ap.ptr = cast(void*)((cast(size_t)ap.ptr + 7) & ~7);
+                    ap.ptr = ap.ptr.alignUp!8;
             }
             auto p = ap.ptr;
-            ap.ptr = p + ((tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1));
+            ap.ptr = p + tsize.alignUp;
         }
         else version (AnyPPC)
         {
@@ -483,19 +483,19 @@ version (LDC)
             // Chapter 3.1.4 and 3.2.3: Alignment may require the va_list pointer to first
             // be aligned before accessing a value.
             if (ti.alignof >= 8)
-                ap = cast(va_list)((cast(size_t)ap + 7) & ~7);
+                ap = ap.alignUp!8;
             version (BigEndian)
                 auto p = (tsize < size_t.sizeof ? ap + (size_t.sizeof - tsize) : ap);
             version (LittleEndian)
                 auto p = ap;
-            ap += (tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += tsize.alignUp;
         }
         else version (AnyMIPS)
         {
             // This works for all types because only the rules for non-floating,
             // non-vector types are used.
             auto p = (tsize < size_t.sizeof ? ap + (size_t.sizeof - tsize) : ap);
-            ap += (tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+            ap += tsize.alignUp;
         }
         else
         {
@@ -524,6 +524,24 @@ template isVectorType(T : __vector(T[N]), size_t N)
     enum isVectorType = true;
 }
 
+private T alignUp(size_t alignment = size_t.sizeof, T)(T base)
+{
+    enum mask = alignment - 1;
+    static assert((alignment & mask) == 0, "alignment must be a power of 2");
+    auto b = cast(size_t) base;
+    b = (b + mask) & ~mask;
+    return cast(T) b;
+}
+
+unittest
+{
+    assert(1.alignUp == size_t.sizeof);
+    assert(31.alignUp!16 == 32);
+    assert(32.alignUp!16 == 32);
+    assert(33.alignUp!16 == 48);
+    assert((-9).alignUp!8 == -8);
+}
+
 // LDC: we need a few non-Windows x86_64 helpers
 version (X86)
 {
@@ -541,7 +559,7 @@ version (X86)
      */
     void va_start(T)(out va_list ap, ref T parmn)
     {
-        ap = cast(va_list)( cast(void*) &parmn + ( ( T.sizeof + int.sizeof - 1 ) & ~( int.sizeof - 1 ) ) );
+        ap = cast(va_list)( cast(void*) &parmn + T.sizeof.alignUp );
     }
 
     /************
@@ -551,7 +569,7 @@ version (X86)
     T va_arg(T)(ref va_list ap)
     {
         T arg = *cast(T*) ap;
-        ap = cast(va_list)( cast(void*) ap + ( ( T.sizeof + int.sizeof - 1 ) & ~( int.sizeof - 1 ) ) );
+        ap = cast(va_list)( cast(void*) ap + T.sizeof.alignUp );
         return arg;
     }
 
@@ -562,7 +580,7 @@ version (X86)
     void va_arg(T)(ref va_list ap, ref T parmn)
     {
         parmn = *cast(T*)ap;
-        ap = cast(va_list)(cast(void*)ap + ((T.sizeof + int.sizeof - 1) & ~(int.sizeof - 1)));
+        ap = cast(va_list)(cast(void*)ap + T.sizeof.alignUp);
     }
 
     /*************
@@ -576,7 +594,7 @@ version (X86)
         //auto p = cast(void*)(cast(size_t)ap + talign - 1) & ~(talign - 1);
         auto p = ap;
         auto tsize = ti.tsize;
-        ap = cast(va_list)(cast(size_t)p + ((tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+        ap = cast(va_list)(cast(size_t)p + tsize.alignUp);
         parmn[0..tsize] = p[0..tsize];
     }
 
@@ -621,7 +639,7 @@ else version (Windows) // Win64
             T arg = **cast(T**)ap;
         else
             T arg = *cast(T*)ap;
-        ap = cast(va_list)(cast(void*)ap + ((size_t.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+        ap = cast(va_list)(cast(void*)ap + size_t.sizeof);
         return arg;
     }
 
@@ -635,7 +653,7 @@ else version (Windows) // Win64
             parmn = **cast(T**)ap;
         else
             parmn = *cast(T*)ap;
-        ap = cast(va_list)(cast(void*)ap + ((size_t.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+        ap = cast(va_list)(cast(void*)ap + size_t.sizeof);
     }
 
     /*************
@@ -649,7 +667,7 @@ else version (Windows) // Win64
         //auto p = cast(void*)(cast(size_t)ap + talign - 1) & ~(talign - 1);
         auto p = ap;
         auto tsize = ti.tsize;
-        ap = cast(va_list)(cast(size_t)p + ((size_t.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+        ap = cast(va_list)(cast(size_t)p + size_t.sizeof);
         void* q = (tsize > size_t.sizeof) ? *cast(void**)p : p;
         parmn[0..tsize] = q[0..tsize];
     }
@@ -717,8 +735,8 @@ else version (X86_64)
             static if (U.length == 0 || T.sizeof > 16 || (U[0].sizeof > 8 && !isVectorType!(U[0])))
             {   // Always passed in memory
                 // The arg may have more strict alignment than the stack
-                auto p = (cast(size_t)ap.stack_args + T.alignof - 1) & ~(T.alignof - 1);
-                ap.stack_args = cast(void*)(p + ((T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+                void* p = ap.stack_args.alignUp!(T.alignof);
+                ap.stack_args = p + T.sizeof.alignUp;
                 parmn = *cast(T*)p;
             }
             else static if (U.length == 1)
@@ -734,7 +752,7 @@ else version (X86_64)
                     else
                     {
                         parmn = *cast(T*)ap.stack_args;
-                        ap.stack_args += (T1.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += T1.sizeof.alignUp;
                     }
                 }
                 else
@@ -746,8 +764,8 @@ else version (X86_64)
                     }
                     else
                     {
-                        auto p = (cast(size_t)ap.stack_args + T.alignof - 1) & ~(T.alignof - 1);
-                        ap.stack_args = cast(void*)(p + ((T.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+                        void* p = ap.stack_args.alignUp!(T.alignof);
+                        ap.stack_args = p + T.sizeof.alignUp;
                         parmn = *cast(T*)p;
                     }
                 }
@@ -772,9 +790,9 @@ else version (X86_64)
                     else
                     {
                         *cast(T1*)&parmn = *cast(T1*)ap.stack_args;
-                        ap.stack_args += (T1.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += T1.sizeof.alignUp;
                         *cast(T2*)p = *cast(T2*)ap.stack_args;
-                        ap.stack_args += (T2.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += T2.sizeof.alignUp;
                     }
                 }
                 else static if (is(T1 == double) || is(T1 == float))
@@ -791,7 +809,7 @@ else version (X86_64)
                     else
                     {
                         *cast(T1*)&parmn = *cast(T1*)ap.stack_args;
-                        ap.stack_args += (T1.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += T1.sizeof.alignUp;
                         a = ap.stack_args;
                         ap.stack_args += 8;
                     }
@@ -814,7 +832,7 @@ else version (X86_64)
                         *cast(T1*)&parmn = *cast(T1*)ap.stack_args;
                         ap.stack_args += 8;
                         *cast(T2*)p = *cast(T2*)ap.stack_args;
-                        ap.stack_args += (T2.sizeof + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += T2.sizeof.alignUp;
                     }
                 }
                 else // both in regular registers
@@ -880,7 +898,7 @@ else version (X86_64)
                     else
                     {
                         p = ap.stack_args;
-                        ap.stack_args += (tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                        ap.stack_args += tsize.alignUp;
                         stack = true;
                     }
                 }
@@ -919,7 +937,7 @@ else version (X86_64)
                                 goto L1;
                             }
                             p = ap.stack_args;
-                            ap.stack_args += (arg2.tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1);
+                            ap.stack_args += arg2.tsize.alignUp;
                         }
                     }
                     else
@@ -952,7 +970,7 @@ else version (X86_64)
                 auto talign = ti.talign;
                 auto tsize = ti.tsize;
                 auto p = cast(void*)((cast(size_t)ap.stack_args + talign - 1) & ~(talign - 1));
-                ap.stack_args = cast(void*)(cast(size_t)p + ((tsize + size_t.sizeof - 1) & ~(size_t.sizeof - 1)));
+                ap.stack_args = p + tsize.alignUp;
                 parmn[0..tsize] = p[0..tsize];
             }
         }
